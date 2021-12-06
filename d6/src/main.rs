@@ -74,7 +74,7 @@ mod tests {
         let ages = [3 as Age, 4, 3, 1, 2];
         let pop = Population::from_ages(ages.iter().copied());
 
-        assert_eq!([0, 1, 1, 2, 1, 0, 0, 0, 0, 0], pop.dist);
+        assert_eq!([0, 1, 1, 2, 1, 0], pop.dist[..6]);
     }
 
     #[test]
@@ -90,6 +90,6 @@ mod tests {
         let mut pop = Population::from_ages([1, 2, 2, 3, 4, 4, 4].iter().copied());
         pop.tick_day();
 
-        assert_eq!([1, 2, 1, 3, 0, 0, 0, 0, 0, 0], pop.dist);
+        assert_eq!([1, 2, 1, 3, 0], pop.dist[..5]);
     }
 }
