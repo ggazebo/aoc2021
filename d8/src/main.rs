@@ -13,13 +13,11 @@ pub enum Segment {
 }
 
 #[derive(PartialEq, Clone, Copy)]
-pub struct SevenSegDisplay {
-    segments: u8,
-}
+pub struct SevenSegDisplay(u8);
 
 impl SevenSegDisplay {
     pub fn empty() -> SevenSegDisplay {
-        SevenSegDisplay { segments: 0u8 }
+        SevenSegDisplay(0)
     }
 
     pub fn from_str(s: &str) -> Result<SevenSegDisplay, &'static str> {
@@ -37,11 +35,11 @@ impl SevenSegDisplay {
             };
         }
 
-        Ok(SevenSegDisplay { segments })
+        Ok(SevenSegDisplay(segments))
     }
 
     pub fn as_mask(&self) -> u8 {
-        self.segments
+        self.0
     }
 
     pub fn has_segment(&self, s: Segment) -> bool {
@@ -54,11 +52,11 @@ impl SevenSegDisplay {
             Segment::F => 0b00000010,
             Segment::G => 0b00000001,
         };
-        self.segments & mask == mask
+        self.0 & mask == mask
     }
 
     pub fn to_value(&self) -> Option<u8> {
-        Some(match self.segments.count_ones() {
+        Some(match self.0.count_ones() {
             2 => 1,
             4 => 4,
             3 => 7,
@@ -92,9 +90,7 @@ impl fmt::Display for SevenSegDisplay {
     }
 }
 
-pub struct Decoder {
-    map: [SevenSegDisplay; 10],
-}
+pub struct Decoder([SevenSegDisplay; 10]);
 
 impl Decoder {
     pub fn from_samples(samples: &Vec<SevenSegDisplay>) -> Decoder {
@@ -112,26 +108,24 @@ impl Decoder {
         for d in samples.iter().filter(|d| d.to_value().is_none()) {
             let mask = d.as_mask();
             match (mask, mask.count_ones()) {
-                (m, c) if c == 6 && (m & mask_4).count_ones() == 3 => map[0] = *d,
                 (m, c) if c == 5 && (m & mask_4).count_ones() == 2 => map[2] = *d,
                 (m, c) if c == 5 && (m & mask_7).count_ones() == 3 => map[3] = *d,
                 (m, c) if c == 5 && (m & mask_7).count_ones() == 2 => map[5] = *d,
                 (m, c) if c == 6 && (m & mask_7).count_ones() == 2 => map[6] = *d,
+                (m, c) if c == 6 && (m & mask_4).count_ones() == 3 => map[0] = *d, // will also match 6 case, so  order matters
                 (m, c) if c == 6 && (m & mask_4).count_ones() == 4 => map[9] = *d,
                 _ => (),
             }
         }
 
-        Decoder { map }
+        Decoder(map)
     }
 
     pub fn decode(&self, d: &SevenSegDisplay) -> Option<u8> {
-        for (i, v) in self.map.iter().enumerate() {
-            if v == d {
-                return Some(i as u8)
-            }
+        match self.0.iter().position(|v| v == d) {
+            Some(i) => Some(i as u8),
+            None => None,
         }
-        None
     }
 }
 
@@ -160,15 +154,15 @@ fn main() {
     let mut sum = 0u32;
     for l in stdin.lock().lines() {
         let (samples, actual) = parse_line(&l.unwrap());
+        let decoder = Decoder::from_samples(&samples);
         for d in &samples {
-            match d.to_value() {
+            match d.to_decoded_value(&decoder) {
                 Some(d) => print!("{} ", d),
                 None => print!("? "),
             }
         }
         print!("| ");
         for d in &actual {
-            //println!("{}", d);
             match d.to_value() {
                 Some(d) => print!("{} ", d),
                 None => print!("? "),
@@ -179,7 +173,6 @@ fn main() {
         p1_total += c;
 
         // Part 2
-        let decoder = Decoder::from_samples(&samples);
         let mut num = 0u32;
         print!(" || ");
         for d in &actual {
