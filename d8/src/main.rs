@@ -1,6 +1,7 @@
 use std::fmt;
 use std::io;
 use std::io::BufRead;
+use std::ops;
 
 pub enum Segment {
     A,
@@ -38,8 +39,12 @@ impl SevenSegDisplay {
         Ok(SevenSegDisplay(segments))
     }
 
-    pub fn as_mask(&self) -> u8 {
+    pub const fn raw(&self) -> u8 {
         self.0
+    }
+
+    pub const fn count_segments(&self) -> u32 {
+        self.0.count_ones()
     }
 
     pub fn has_segment(&self, s: Segment) -> bool {
@@ -70,6 +75,13 @@ impl SevenSegDisplay {
     }
 }
 
+impl ops::BitAnd for SevenSegDisplay {
+    type Output = Self;
+    fn bitand(self, rhs: Self) -> Self::Output {
+        Self(self.0 & rhs.0)
+    }
+}
+
 impl fmt::Display for SevenSegDisplay {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         Ok({
@@ -96,26 +108,24 @@ impl Decoder {
     pub fn from_samples(samples: &Vec<SevenSegDisplay>) -> Decoder {
         let mut map = [SevenSegDisplay::empty(); 10];
 
-        for d in samples {
-            match d.to_value() {
-                Some(v) => map[v as usize] = *d,
+        for &s in samples {
+            match s.to_value() {
+                Some(v) => map[v as usize] = s,
                 _ => (),
             };
         }
 
-        let mask_4 = map[4].as_mask();
-        let mask_7 = map[7].as_mask();
-        for d in samples.iter().filter(|d| d.to_value().is_none()) {
-            let mask = d.as_mask();
-            match (mask, mask.count_ones()) {
-                (m, c) if c == 5 && (m & mask_4).count_ones() == 2 => map[2] = *d,
-                (m, c) if c == 5 && (m & mask_7).count_ones() == 3 => map[3] = *d,
-                (m, c) if c == 5 && (m & mask_7).count_ones() == 2 => map[5] = *d,
-                (m, c) if c == 6 && (m & mask_7).count_ones() == 2 => map[6] = *d,
-                (m, c) if c == 6 && (m & mask_4).count_ones() == 3 => map[0] = *d, // will also match 6 case, so  order matters
-                (m, c) if c == 6 && (m & mask_4).count_ones() == 4 => map[9] = *d,
-                _ => (),
-            }
+        for &s in samples.iter().filter(|&d| d.to_value().is_none()) {
+            let num = match (s, s.count_segments()) {
+                (m, c) if c == 5 && (m & map[4]).count_segments() == 2 => 2,
+                (m, c) if c == 5 && (m & map[7]).count_segments() == 3 => 3,
+                (m, c) if c == 5 && (m & map[7]).count_segments() == 2 => 5,
+                (m, c) if c == 6 && (m & map[7]).count_segments() == 2 => 6,
+                (m, c) if c == 6 && (m & map[4]).count_segments() == 3 => 0, // will also match 6 case, so  order matters
+                (m, c) if c == 6 && (m & map[4]).count_segments() == 4 => 9,
+                _ => panic!(),
+            };
+            map[num] = s;
         }
 
         Decoder(map)
