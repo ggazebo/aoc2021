@@ -1,6 +1,8 @@
 use std::fmt;
+use std::hash::Hash;
 use std::io::BufRead;
 use std::iter::Iterator;
+use std::collections::HashMap;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct Height(u8);
@@ -14,6 +16,12 @@ impl Height {
         self.0 as u32 + 1
     }
 }
+impl std::ops::Add for Height {
+    type Output = Self;
+    fn add(self, other: Self) -> Self {
+        Height(self.0 + other.0)
+    }
+}
 
 impl fmt::Display for Height {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -21,7 +29,7 @@ impl fmt::Display for Height {
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Copy, Default)]
+#[derive(PartialEq, Eq, Clone, Copy, Default, Hash)]
 pub struct Pos {
     r: usize,
     c: usize,
@@ -90,17 +98,17 @@ pub struct HeightMapValues<'a> {
 
 impl<'a> Iterator for HeightMapValues<'a> {
     type Item = HeightInfo<'a>;
-    //type Item = (Pos, &'a Height);
 
     fn next(&mut self) -> Option<Self::Item> {
+        if self.p.r >= self.map.height {
+            return None
+        }
+
         let p = self.p;
 
         self.p.c = (p.c + 1) % self.map.width;
         if self.p.c == 0 {
             self.p.r += 1;
-            if self.p.r > self.map.height {
-                return None;
-            }
         }
 
         Some((p, &self.map[p]))
@@ -173,6 +181,72 @@ fn part1(map: &HeightMap) {
     println!("risk: {}", risk);
 }
 
+#[derive(Clone, Copy)]
+struct Basin(Pos, usize);
+
+struct BasinMap<'a> {
+    map: &'a HeightMap,
+    basin_map: Vec<Basin>,
+}
+
+impl std::ops::Index<Pos> for BasinMap<'_> {
+    type Output = Basin;
+    fn index(&self, index: Pos) -> &Self::Output {
+        &self.basin_map[index.r * self.map.width + index.c]
+    }
+}
+
+impl<'a> std::ops::IndexMut<Pos> for BasinMap<'a> {
+    fn index_mut(&mut self, index: Pos) -> &mut Self::Output {
+        &mut self.basin_map[index.r * self.map.width + index.c]
+    }
+}
+
+fn part2(map: &HeightMap) {
+    let mut basin_map = BasinMap{
+        map,
+        basin_map: map.iter_with_pos().map(|(p, h)| Basin(p, if *h == Height(9) { 0 } else { 1 })).collect(),
+    };
+
+    let mut basin_sizes = HashMap::<Pos, usize>::with_capacity(200);
+
+    for layer in 0..9 {
+        for (my_p, &my_h) in map.iter_with_pos().filter(|(_, &h)| h == Height(layer)) {
+            let basin_p = basin_map[my_p].0;
+            for (adj_p, _) in map.adjacents(my_p).filter(|(_, &adj_h)| my_h < adj_h && adj_h < Height(9)) {
+                basin_map[adj_p] = Basin(basin_p, 1);
+            };
+
+            let e = basin_sizes.entry(basin_p).or_insert(0);
+            *e += 1;
+        }
+    }
+
+    for r in 0..map.height {
+        for c in 0..map.width {
+            let b = basin_map[Pos::new(r, c)];
+            /*
+            if b.1 > 0 {
+                print!("{}", b.0);
+            }
+            else {
+                print!(".....");
+            }
+            */
+            //print!("{}{}", b.0, b.1);
+            print!("{}", basin_map[Pos::new(r, c)].1);
+        }
+        println!("");
+    }
+
+    println!("{:?}", &basin_sizes);
+
+    let mut sizes_ordered: Vec<usize> = basin_sizes.values().copied().collect();
+    sizes_ordered.sort_by(|a, b| b.cmp(a));
+    let score: usize = sizes_ordered[0..3].iter().product();
+    println!("{}", score);
+}
+
 fn main() {
     let stdin = std::io::stdin();
     let lines = stdin.lock().lines().map(|l| l.unwrap());
@@ -180,5 +254,6 @@ fn main() {
 
     println!("map dim: {}x{}", map.width, map.height);
 
-    part1(&map);
+    //part1(&map);
+    part2(&map);
 }
