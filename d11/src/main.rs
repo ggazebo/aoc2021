@@ -235,17 +235,15 @@ fn main() {
     println!("{}", &map);
 
     let mut flashes = 0;
-    let mut first_sync = None;
     for step in 1..=1000 {
         let f = map.step();
         flashes += f;
-        println!("step {}", step);
+        println!("step {} ({} flahes this step; {} total)", step, f, flashes);
         println!("{}", &map);
 
-        if f == 100 && first_sync.is_none() {
-            first_sync = Some(step);
+        if f == 100 {
+            println!("synchronized at step {}", step);
+            break;
         }
     }
-    println!("{} flashes", flashes);
-    println!("first sync: step {}", first_sync.unwrap_or(-1));
 }
