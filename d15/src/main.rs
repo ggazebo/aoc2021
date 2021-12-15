@@ -263,7 +263,7 @@ impl<'a, 'b> visit::IntoNeighbors for &'b ExtendedCave<'a>
             neighbors.push(Pos(p.0 - 1, p.1).to_index(dim));
         }
         if p.1 > 0 {
-            neighbors.push(Pos(p.0, p.1 + 1).to_index(dim));
+            neighbors.push(Pos(p.0, p.1 - 1).to_index(dim));
         }
         CaveNeighbors(neighbors, 0)
     }
