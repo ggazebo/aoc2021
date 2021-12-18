@@ -30,13 +30,6 @@ impl Probe {
         self.v
     }
 
-    pub fn next(&self) -> Probe {
-        Probe {
-            p: self.p + self.v,
-            v: self.v.next(),
-        }
-    }
-
     pub fn fire(&self) -> ProbeFlight {
         ProbeFlight(self.p, self.v)
     }
@@ -57,6 +50,13 @@ impl Probe {
         let y_diff = target.y.start() + 1;
 
         Some(Velocity::from((x_v, -y_diff)))
+    }
+
+    pub fn can_hit(&self, target: &Target) -> bool {
+        match self.fire_at(target).last().unwrap() {
+            Flight::Hit(_) => true,
+            _ => false,
+        }
     }
 }
 
@@ -237,6 +237,27 @@ fn p1(target: &Target) {
     println!("max height: {}", max);
 }
 
+fn p2(target: &Target) {
+    let max_flight_v = Probe::find_highest_trajectory(target).unwrap();
+    let min_x = max_flight_v.x();
+    let max_x = *target.x.end();
+    let max_y = max_flight_v.y();
+    let min_y = *target.y.start();
+
+    let mut count = 0;
+    for vx in min_x..=max_x {
+        for vy in min_y..=max_y {
+            let v = Velocity::from((vx, vy));
+            let p = Probe::from(v);
+            if p.can_hit(target) {
+                println!("{:?} hits", &v);
+                count += 1;
+            }
+        }
+    }
+    println!("{} valid firing solutions", count);
+}
+
 fn main() {
     let stdin = io::stdin();
     let l = stdin.lock().lines().next().unwrap().unwrap();
@@ -244,5 +265,6 @@ fn main() {
 
     println!("target: {:?}", &target);
 
-    p1(&target);
+    //p1(&target);
+    p2(&target);
 }
