@@ -1,6 +1,8 @@
+use std::cmp;
 use std::io;
 use std::io::BufRead;
 use std::fmt;
+use itertools::Itertools;
 
 type Leaf = Option<u8>;
 
@@ -302,14 +304,27 @@ impl<'a> Iterator for SnailfishNumLeafs<'a> {
 
 fn main() {
     let stdin = io::stdin();
-    let nums = stdin.lock().lines().map(|l| SnailfishNumber::try_from(l.unwrap().as_str()).unwrap());
-    let sum = nums.reduce(|a, n| {
+    let nums: Vec<SnailfishNumber> = stdin.lock().lines()
+        .map(|l| SnailfishNumber::try_from(l.unwrap().as_str()).unwrap())
+        .collect();
+    let sum = nums.iter().copied().reduce(|a, n| {
         let s = a + n;
         println!("{} + {} = {}", &a, &n, &s);
         s
     }).unwrap();
     println!("{}", &sum);
     println!("magnitude {}", sum.magnitude());
+
+    let perms = nums.iter().permutations(2);
+    let max_magnitude = perms
+        .fold(0, |max, n| {
+            let a = n[0];
+            let b = n[1];
+            let m = (*a + *b).magnitude();
+            cmp::max(max, m)
+        });
+
+    println!("max sum {}", max_magnitude);
 }
 
 #[cfg(test)]
