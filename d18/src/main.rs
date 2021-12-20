@@ -1,3 +1,5 @@
+use std::io;
+use std::io::BufRead;
 use std::fmt;
 
 type Leaf = Option<u8>;
@@ -9,7 +11,29 @@ pub struct SnailfishNumber {
 }
 
 impl SnailfishNumber {
-    pub fn simplify(&mut self) {
+    pub fn magnitude(&self) -> u32 {
+        Self::magnitude_slice(&self.l).unwrap()
+    }
+
+    fn magnitude_slice(s: &[Option<u8>]) -> Option<u32> {
+        if s.len() == 1 {
+            match s[0] {
+                Some(n) => Some(n as u32),
+                None => None,
+            }
+        } else {
+            let mid = s.len() / 2;
+            let left = Self::magnitude_slice(&s[0..mid]);
+            let right = Self::magnitude_slice(&s[mid..]);
+            match (left, right) {
+                (Some(l), Some(r)) => Some(3 * l as u32 + 2 * r as u32),
+                (Some(l), None) => Some(l),
+                (None,  _) => None,
+            }
+        }
+    }
+
+    pub fn reduce(&mut self) {
         loop {
             if self.explode() {
                 continue;
@@ -29,7 +53,7 @@ impl SnailfishNumber {
         for (i, pair) in self.l.chunks_exact_mut(2).enumerate() {
             //println!("{:?} {:?}<-{:?},{:?}->{:?}", pair, left_idx, left, right, right_idx);
             match (pair[0], pair[1]) {
-                (Some(l), Some(r)) => {
+                (Some(l), Some(r)) if left.is_none() => {
                     left = Some(l);
                     right = Some(r);
 
@@ -40,10 +64,12 @@ impl SnailfishNumber {
                 (_, Some(_)) if left.is_none() => left_idx = Some(i*2 + 1),
                 (Some(_), _) if right.is_some() && right_idx.is_none() => {
                     right_idx = Some(i*2);
+                    //println!("explode to: {:?}<-{:?},{:?}->{:?}", left_idx, left, right, right_idx);
                     break
                 },
                 (_, Some(_)) if right.is_some() && right_idx.is_none() => {
                     right_idx = Some(i*2 + 1);
+                    //println!("explode to: {:?}<-{:?},{:?}->{:?}", left_idx, left, right, right_idx);
                     break;
                 },
                 _ => (),
@@ -80,10 +106,11 @@ impl SnailfishNumber {
             None => return false,
         };
 
-        let right = (self.l[left+1..]
+        let right = self.l[left+1..]
             .iter()
             .position(|n| n.is_some())
-            .unwrap_or(self.l.len()) + 1) / 2;
+            .unwrap_or(self.l[left..].len()) + 1;
+        let right = left + right / 2;
 
         let v = self.l[left].unwrap();
         self.l[left] = Some(v / 2);
@@ -129,6 +156,27 @@ impl SnailfishNumber {
         };
 
         comma_pos + 1 + end + 1
+    }
+}
+
+impl std::ops::Add<SnailfishNumber> for SnailfishNumber {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        let mut l = [None; 32];
+
+        let mut left = self.l.chunks_exact(2)
+            .map(|c| c[0]);
+        let mut right = rhs.l.chunks_exact(2)
+            .map(|c| c[0]);
+
+        l[0..16].fill_with(|| left.next().unwrap());
+        l[16..].fill_with(|| right.next().unwrap());
+
+        //println!("after sum: {:?}", &l);
+        let mut sum = SnailfishNumber { l };
+        sum.reduce();
+        sum
     }
 }
 
@@ -253,10 +301,15 @@ impl<'a> Iterator for SnailfishNumLeafs<'a> {
 
 
 fn main() {
-    let mut n = SnailfishNumber::try_from("[10,11]").unwrap();
-    println!("{}", &n);
-    n.split();
-    println!("{}", &n);
+    let stdin = io::stdin();
+    let nums = stdin.lock().lines().map(|l| SnailfishNumber::try_from(l.unwrap().as_str()).unwrap());
+    let sum = nums.reduce(|a, n| {
+        let s = a + n;
+        println!("{} + {} = {}", &a, &n, &s);
+        s
+    }).unwrap();
+    println!("{}", &sum);
+    println!("magnitude {}", sum.magnitude());
 }
 
 #[cfg(test)]
@@ -309,14 +362,71 @@ mod tests {
             n.explode();
             assert_eq!(n, SnailfishNumber::try_from("[[3,[2,[8,0]]],[9,[5,[7,0]]]]").unwrap());
         }
+
+        let mut n = SnailfishNumber::try_from("[[[[[1,1],[2,2]],[3,3]],[4,4]],[5,5]]").unwrap();
+        n.explode();
+        assert_eq!(n, SnailfishNumber::try_from("[[[[0,[3,2]],[3,3]],[4,4]],[5,5]]").unwrap());
+
+        let mut n = SnailfishNumber::try_from("[[[[0,[3,2]],[3,3]],[4,4]],[5,5]]").unwrap();
+        n.explode();
+        assert_eq!(n, SnailfishNumber::try_from("[[[[3,0],[5,3]],[4,4]],[5,5]]").unwrap());
+    }
+
+    #[test]
+    fn reduce_samples() {
+        let mut n = SnailfishNumber::try_from("[[[[[1,1],[2,2]],[3,3]],[4,4]],[5,5]]").unwrap();
+        n.reduce();
+        assert_eq!(n, SnailfishNumber::try_from("[[[[3,0],[5,3]],[4,4]],[5,5]]").unwrap());
     }
 
     #[test]
     fn splits() {
         {
             let mut n = SnailfishNumber::try_from("[10,11]").unwrap();
-            n.split();
+            while n.split(){}
             assert_eq!(n, SnailfishNumber::try_from("[[5,5],[5,6]]").unwrap());
         }
+    }
+
+    #[test]
+    fn sum_sample1() {
+        let a = SnailfishNumber::try_from("[[[[4,3],4],4],[7,[[8,4],9]]]").unwrap();
+        let b = SnailfishNumber::try_from("[1,1]").unwrap();
+
+        let s = a + b;
+        assert_eq!(s, SnailfishNumber::try_from("[[[[0,7],4],[[7,8],[6,0]]],[8,1]]").unwrap());
+    }
+
+    #[test]
+    fn mangnitude_samples() {
+        assert_eq!(SnailfishNumber::try_from("[9,1]").unwrap().magnitude(), 29);
+        assert_eq!(SnailfishNumber::try_from("[1,9]").unwrap().magnitude(), 21);
+        assert_eq!(SnailfishNumber::try_from("[[9,1],[1,9]]").unwrap().magnitude(), 129);
+        assert_eq!(SnailfishNumber::try_from("[[1,2],[[3,4],5]]").unwrap().magnitude(), 143);
+        assert_eq!(SnailfishNumber::try_from("[[[[0,7],4],[[7,8],[6,0]]],[8,1]]").unwrap().magnitude(), 1384);
+        assert_eq!(SnailfishNumber::try_from("[[[[1,1],[2,2]],[3,3]],[4,4]]").unwrap().magnitude(), 445);
+        assert_eq!(SnailfishNumber::try_from("[[[[3,0],[5,3]],[4,4]],[5,5]]").unwrap().magnitude(), 791);
+        assert_eq!(SnailfishNumber::try_from("[[[[5,0],[7,4]],[5,5]],[6,6]]").unwrap().magnitude(), 1137);
+        assert_eq!(SnailfishNumber::try_from("[[[[8,7],[7,7]],[[8,6],[7,7]]],[[[0,7],[6,6]],[8,7]]]").unwrap().magnitude(), 3488);
+    }
+
+    #[test]
+    fn sum_samples() {
+        let adder = |inputs: &[&str]| {
+            inputs
+                .iter()
+                .map(|&s| SnailfishNumber::try_from(s).unwrap())
+                .reduce(|s, n| s + n)
+                .unwrap()
+        };
+
+        let l = ["[1,1]", "[2,2]", "[3,3]", "[4,4]"];
+        assert_eq!(adder(&l), SnailfishNumber::try_from("[[[[1,1],[2,2]],[3,3]],[4,4]]").unwrap());
+
+        let l = ["[1,1]", "[2,2]", "[3,3]", "[4,4]", "[5,5]"];
+        assert_eq!(adder(&l), SnailfishNumber::try_from("[[[[3,0],[5,3]],[4,4]],[5,5]]").unwrap());
+
+        let l = ["[1,1]", "[2,2]", "[3,3]", "[4,4]", "[5,5]", "[6,6]"];
+        assert_eq!(adder(&l), SnailfishNumber::try_from("[[[[5,0],[7,4]],[5,5]],[6,6]]").unwrap());
     }
 }
