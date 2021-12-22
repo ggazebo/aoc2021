@@ -93,53 +93,6 @@ impl Player {
         self.position += rolls.iter().sum();
         self.score += self.position();
     }
-
-    pub fn steps_to_win(p1: Player, p2: Player) -> [(u64, u64); 12] {
-        let mut results = Default::default();
-
-        Self::steps_to_win_impl(p1, p2, &mut results, 1);
-        results
-    }
-
-    const WIN_SCORE: Score = 15;
-
-    fn steps_to_win_impl(p1: Player, p2: Player, results: &mut [(u64, u64); 12], turn: usize) {
-        let rolls = [
-            [3,3,1],[3,3,2],[3,3,3],
-            [3,2,1],[3,2,2],[3,2,3],
-            [3,1,1],[3,1,2],[3,1,3],
-            [2,3,1],[2,3,2],[2,3,3],
-            [2,2,1],[2,2,2],[2,2,3],
-            [2,1,1],[2,1,2],[2,1,3],
-            [1,1,1],[1,1,2],[1,1,3],
-            [1,2,1],[1,2,2],[1,2,3],
-            [1,3,1],[1,3,2],[1,3,3],
-        ];
-
-        rolls.map(|roll| {
-            let mut p1 = p1.clone();
-            p1.take_turn_det(&roll);
-            if p1.score() >= Self::WIN_SCORE {
-                //println!("p1 win: {} {}", turn, p1.score());
-                let x = results[turn];
-                results[turn] = (x.0 + 1, x.1);
-            } else {
-                rolls.map(|roll| {
-                    let mut p2 = p2.clone();
-                    p2.take_turn_det(&roll);
-                    //if p2.score() >= 21 {
-                    if p2.score() >= Self::WIN_SCORE {
-                        //println!("p2 win: {} {}", turn, p2.score());
-                        let x = results[turn];
-                        results[turn] = (x.0, x.1 + 1);
-                    } else {
-                        Self::steps_to_win_impl(p1, p2, results, turn + 1);
-                    }
-                });
-            }
-            //println!("done roll {:?} ({})", roll, turn);
-        });
-    }
 }
 
 impl fmt::Debug for Player {
@@ -185,7 +138,7 @@ impl DiracDiceTurn {
                 }
             }
         }
-        wins
+        wins * other_player_states
     }
 
     const ROLLS: [[Roll; 3]; 27] = [
@@ -215,13 +168,10 @@ impl Iterator for DiracDiceTurn {
         let mut player2_wins = self.player2_wins;
 
         // Player 1 takes turn
-        let p1_wins_now = Self::player_turn(&self.player1, &mut player1, self.player2.values().sum());
-        let p2_prev_states = self.player2.values().sum::<usize>();
-        player1_wins += p1_wins_now * p2_prev_states;
+        player1_wins += Self::player_turn(&self.player1, &mut player1, self.player2.values().sum());
 
         // Player 2 turn
-        let p2_wins_now = Self::player_turn(&self.player2, &mut player2, self.player1.values().sum());
-        player2_wins += p2_wins_now * player1.values().sum::<usize>();
+        player2_wins += Self::player_turn(&self.player2, &mut player2, player1.values().sum());
 
         Some(Self { turn: self.turn + 1, player1, player2, player1_wins, player2_wins })
     }
@@ -251,9 +201,6 @@ fn _p1(pos1: Position, pos2: Position, dice: &mut impl Dice) {
 }
 
 fn p2(pos1: Position, pos2: Position) {
-    //let player1 = Player::start_at(pos1);
-    //let player2 = Player::start_at(pos2);
-
     let mut turn = DiracDiceTurn::from_starts(pos1, pos2);
     for _ in 0..11 {
         turn = match turn.next() {
@@ -266,33 +213,6 @@ fn p2(pos1: Position, pos2: Position) {
         println!("player1 states: {:?}", turn.player1);
         println!("player2 states: {:?}", turn.player2);
     }
-
-    //let p1_wins = player1.steps_to_win();
-    //let p2_wins = player2.steps_to_win();
-    //let stats = Player::steps_to_win(player1, player2);
-
-    //println!("stats: {:?}", &stats);
-    //println!("p1: {:?}", p1_wins);
-    //println!("p2: {:?}", p2_wins);
-
-    /*
-    let p1_win_count = (3..=10)
-        .map(|turn| {
-            //p1_wins[turn] * (turn..=10).map(|t| p2_wins[t]).sum::<u64>()
-            p1_wins[turn] * (27u64.pow((turn-1) as u32) - p2_wins[3..turn].iter().sum::<u64>())
-        })
-        .sum::<u64>();
-
-    let p1_loss_count = (3..=10)
-        .map(|turn| {
-            //p1_wins[turn] * (3..turn).map(|t| p2_wins[t]).sum::<u64>()
-            p2_wins[turn] * (27u64.pow((turn-1) as u32) - p1_wins[..turn].iter().sum::<u64>())
-        })
-        .sum::<u64>();
-
-    println!("p1 stats: {} wins, {} losses", p1_win_count, p1_loss_count);
-    println!("{} wins overall", if p1_win_count > p1_loss_count { "Player 1"} else { "Player 2"});
-    */
 }
 
 fn main() {
