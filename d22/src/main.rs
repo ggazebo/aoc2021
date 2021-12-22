@@ -1,3 +1,4 @@
+use std::cmp::{min, max};
 use std::fmt;
 use std::io;
 use std::io::BufRead;
@@ -17,6 +18,35 @@ impl Cuboid {
     pub fn x(&self) -> ReactorRange { self.x.clone() }
     pub fn y(&self) -> ReactorRange { self.y.clone() }
     pub fn z(&self) -> ReactorRange { self.z.clone() }
+
+    pub fn volume(&self) -> u64 {
+        (self.x.end() - self.x.start() + 1).abs() as u64
+            * (self.y.end() - self.y.start() + 1).abs() as u64
+            * (self.z.end() - self.z.start() + 1).abs() as u64
+    }
+
+    pub fn intersection(&self, other: &Cuboid) -> Option<Cuboid> {
+        let x_overlaps = self.x.contains(other.x.start()) || self.x.contains(other.x.end());
+        let y_overlaps = self.y.contains(other.y.start()) || self.y.contains(other.y.end());
+        let z_overlaps = self.z.contains(other.z.start()) || self.z.contains(other.z.end());
+        if x_overlaps && y_overlaps && z_overlaps {
+            Some(Cuboid {
+                x: max(*self.x.start(), *other.x.start())..=min(*self.x.end(), *other.x.end()),
+                y: max(*self.y.start(), *other.y.start())..=min(*self.y.end(), *other.y.end()),
+                z: max(*self.z.start(), *other.z.start())..=min(*self.z.end(), *other.z.end()),
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn to_off(&self) -> Instruction {
+        Instruction { state: CubeState::Off, cuboid: self.clone() }
+    }
+
+    pub fn to_on(&self) -> Instruction {
+        Instruction { state: CubeState::On, cuboid: self.clone() }
+    }
 
     pub fn try_range_from(s: &str) -> Result<ReactorRange, &'static str> {
         let start_end = s.find('.').ok_or("failed to find \"..\"")?;
@@ -47,6 +77,48 @@ impl Instruction {
         limit.contains(c.x.start()) && limit.contains(c.x.end())
             && limit.contains(c.y.start()) && limit.contains(c.y.end())
             && limit.contains(c.z.start()) && limit.contains(c.z.end())
+    }
+
+    pub fn is_on(&self) -> bool {
+        self.state == CubeState::On
+    }
+
+    pub fn is_off(&self) -> bool {
+        self.state == CubeState::Off
+    }
+
+    //pub fn apply(instructions: &mut impl Iterator<Item=Instruction>) -> Vec<Instruction> {
+    pub fn apply<'a, T>(instructions: T) -> Vec<Instruction>
+    where T: 'a + IntoIterator<Item = &'a Instruction> {
+        let mut output: Vec<Instruction> = Vec::with_capacity(1000);
+
+        for i in instructions {
+            let mut adds = Vec::with_capacity(1);
+            if i.is_on() {
+                adds.push(i.clone());
+                for existing in &output {
+                    match existing.cuboid().intersection(i.cuboid()) {
+                        Some(c) if existing.is_on() => adds.push(c.to_off()),
+                        Some(c) if existing.is_off() => adds.push(c.to_on()),
+                        _ => (),
+                    };
+                }
+            } else {
+                for existing in &output {
+                    match existing.cuboid().intersection(i.cuboid()) {
+                        Some(c) if existing.is_on() => adds.push(c.to_off()),
+                        Some(c) if existing.is_off() => adds.push(c.to_on()),
+                        _ => (),
+                    };
+                }
+            }
+
+            output.extend(adds);
+
+            println!("!! {} ({})", count_on(&output), &output.len());
+        }
+
+        output
     }
 }
 
@@ -145,6 +217,34 @@ fn _p1(instructions: &[Instruction]) {
     println!("ON: {}", on_count);
 }
 
+fn _p1v2(instructions: &Vec<Instruction>) {
+    //let instructions: Vec<&Instruction> = instructions.iter().filter(|&i| i.is_boot()).collect();
+    let instructions = instructions.iter().filter(|&i| i.is_boot());
+
+    let applied = Instruction::apply(instructions);
+    let sum = count_on(&applied);
+    println!("result: {}", sum);
+}
+
+fn count_on(countable: &Vec<Instruction>) -> u64 {
+    let mut sum = 0;
+    for i in countable {
+        let v = i.cuboid().volume();
+        if i.is_on() {
+            sum += v;
+        } else {
+            sum -= v;
+        }
+    }
+    sum
+}
+
+fn _p2(instructions: &Vec<Instruction>) {
+    let applied = Instruction::apply(instructions);
+    let sum = count_on(&applied);
+    println!("result: {}", sum);
+}
+
 fn main() {
     let stdin = io::stdin();
     let lines = stdin.lock().lines().map(|l| l.unwrap());
@@ -155,5 +255,8 @@ fn main() {
         println!("{}", inst);
     }
 
-    _p1(instructions.as_slice());
+    //_p1(instructions.as_slice());
+    _p1v2(&instructions);
+
+    //_p2(&instructions);
 }
