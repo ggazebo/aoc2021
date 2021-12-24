@@ -71,6 +71,28 @@ impl fmt::Debug for Position {
         }
     }
 }
+impl fmt::Debug for State {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        for n in 0..=10 {
+            match self.occupied(Position::Hallway(n)) {
+                Some(a) => write!(f, "{}", a)?,
+                None => write!(f, ".")?,
+            }
+        }
+        writeln!(f)?;
+        for d in [Room::Outer, Room::Inner] {
+            write!(f, "  ")?;
+            for a in [Amphipod::Amber, Amphipod::Bronze, Amphipod::Copper, Amphipod::Desert] {
+                match self.occupied(Position::Room(a, d)) {
+                    Some(a) => write!(f, "{} ", a)?,
+                    None => write!(f, ". ")?,
+                }
+            }
+            writeln!(f)?
+        }
+        write!(f, "")
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Room {
@@ -114,12 +136,13 @@ impl State {
             [Position::Room(from, _), Position::Room(to, _)] if from == to => return true,
             // Can't move out of Inner if Outer is occupied
             [Position::Room(a, Room::Inner), _] if self.is_occupied(Position::Room(*a, Room::Outer)) => return true,
+            // Can't move into Inner if Outer is occupied
             [_, Position::Room(r_type, Room::Inner)] => {
                 if self.is_occupied(Position::Room(*r_type, Room::Outer)) {
                     return true
                 }
             },
-            [_, Position::Room(r_type, Room::Outer)] => {
+            [_, Position::Room(r_type, _)] => {
                 if *r_type != a {
                     return true
                 }
@@ -136,25 +159,20 @@ impl State {
 
         // Check that hallway is clear
         let hallway_range = match [path.start(), path.end()] {
-            [Position::Room(Amphipod::Amber, _), Position::Hallway(h)]
-                | [Position::Hallway(h), Position::Room(Amphipod::Amber, _)] => 
-                    if h < 2 { h+1..=2 } else { 2..=h-1 },
-            [Position::Room(Amphipod::Bronze, _), Position::Hallway(h)]
-                | [Position::Hallway(h), Position::Room(Amphipod::Bronze, _)] => 
-                    if h < 4 { h+1..=4 } else { 4..=h-1 },
-            [Position::Room(Amphipod::Copper, _), Position::Hallway(h)]
-                | [Position::Hallway(h), Position::Room(Amphipod::Copper, _)] => 
-                    if h < 6 { h+1..=6 } else { 6..=h-1 },
-            [Position::Room(Amphipod::Desert, _), Position::Hallway(h)]
-                | [Position::Hallway(h), Position::Room(Amphipod::Desert, _)] => 
-                    if h < 8 { h+1..=8 } else { 8..=h-1 },
-            [Position::Hallway(_), Position::Hallway(_)] => panic!(),
+            [Position::Room(a, _), Position::Hallway(h)] => {
+                let ah = path.start().hallway_pos();
+                if ah < h { ah..=h } else { h..=ah }
+            },
+            [Position::Hallway(h), Position::Room(a, _)] => {
+                let ah = path.end().hallway_pos();
+                if ah < h { ah..=h-1 } else { h+1..=ah }
+            }
             [p1, p2] => {
                 let a = p1.hallway_pos();
                 let b = p2.hallway_pos();
                 if a < b { a..=b } else { b..=a }
             }
-            //_ => panic!(),
+            _ => panic!(),
         };
 
         for n in hallway_range {
@@ -232,6 +250,9 @@ impl Path {
 
 
     pub fn steps(&self) -> usize {
+        if self.0[0] == self.0[1] {
+            return 0
+        }
         let mut p = self.0.clone();
         p.sort();
         match p {
@@ -305,7 +326,9 @@ impl visit::IntoEdges for StateGraph {
             };
 
             match start {
+                // Don't move if already in room inner
                 Position::Room(rm, Room::Inner) if a == rm => { continue; },
+                // Don't move if already in full room
                 Position::Room(rm, d) if a == rm => {
                     let other = match d {
                         Room::Inner => Room::Outer,
@@ -448,12 +471,12 @@ impl visit::EdgeRef for StateTransition {
 
 const _ALL_POSITIONS: [Position; 15] = [
     Position::Room(Amphipod::Amber, Room::Inner),
-    Position::Room(Amphipod::Amber, Room::Outer),
     Position::Room(Amphipod::Bronze, Room::Inner),
-    Position::Room(Amphipod::Bronze, Room::Outer),
     Position::Room(Amphipod::Copper, Room::Inner),
-    Position::Room(Amphipod::Copper, Room::Outer),
     Position::Room(Amphipod::Desert, Room::Inner),
+    Position::Room(Amphipod::Amber, Room::Outer),
+    Position::Room(Amphipod::Bronze, Room::Outer),
+    Position::Room(Amphipod::Copper, Room::Outer),
     Position::Room(Amphipod::Desert, Room::Outer),
     Position::Hallway(0),
     Position::Hallway(1),
@@ -518,10 +541,10 @@ fn main() {
     println!("for SAMPLE");
     match find_shortest(&_SAMPLE_INPUT) {
         Some((cost, states)) => {
-            println!("{} energy", cost);
             for s in states {
                 println!(": {:?}", s.0);
             }
+            println!("{} energy", cost);
         },
         None => println!("NO SOLUTION"),
     };
@@ -529,10 +552,10 @@ fn main() {
     println!("for PROBLEM");
     match find_shortest(&_PROBLEM_INPUT) {
         Some((cost, states)) => {
-            println!("{} energy", cost);
             for s in states {
-                println!(": {:?}", s.0);
+                println!("{:?}", s);
             }
+            println!("{} energy", cost);
         },
         None => println!("NO SOLUTION"),
     };
