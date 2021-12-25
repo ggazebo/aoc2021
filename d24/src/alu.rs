@@ -75,16 +75,20 @@ impl Alu {
         Alu { x: 0.into(), y: 0.into(), z: 0.into(), w: 0.into() }
     }
 
-    pub fn execute(
+    pub fn initialized(x: Word, y: Word, z: Word, w: Word) -> Alu {
+        Alu { x: x.into(), y: y.into(), z: z.into(), w: w.into() }
+    }
+
+    pub fn execute<'a, 'b>(
         &mut self,
-        instructions: impl IntoIterator<Item = Instruction>,
-        inputs: impl IntoIterator<Item = Word>
+        instructions: impl Iterator<Item = &'a Instruction>,
+        inputs: impl IntoIterator<Item = &'b Word>
     ) -> (Word, Word, Word, Word) {
         let mut inputs = inputs.into_iter();
         for i in instructions {
             match i {
-                Instruction::Op1(Op1::Input, r) => self[r].set(inputs.next().unwrap()),
-                Instruction::Op2(op, r, l) => self.execute_op2(op, r, l),
+                Instruction::Op1(Op1::Input, r) => self[*r].set(*inputs.next().unwrap()),
+                Instruction::Op2(op, r, l) => self.execute_op2(*op, *r, *l),
                 _ => panic!("Attempted to execute invalid instruction"),
             }
         }
@@ -211,7 +215,7 @@ mod tests {
         ];
 
         let mut alu = Alu::new();
-        let (x, ..) = alu.execute(instr, [5]);
+        let (x, ..) = alu.execute(instr.iter(), [5].iter());
 
         assert_eq!(-5, x);
     }
