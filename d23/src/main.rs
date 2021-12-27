@@ -93,23 +93,14 @@ pub trait RoomSize {
     fn room_size() -> usize;
 }
 
-struct Depth2;
-impl RoomSize for Depth2 {
-    fn room_size() -> usize { 2 }
-}
-struct Depth4;
-impl RoomSize for Depth4 {
-    fn room_size() -> usize { 4 }
-}
-
 pub trait SliceBackedBurrow {
-    type RoomSize: RoomSize;
+    fn stride() -> usize;
     fn positions_slice<'a>(&'a self, a: Amphipod) -> &'a [Position];
     fn positions_mut<'a>(&'a mut self, a: Amphipod) -> &'a mut [Position];
 }
 
-pub trait BurrowState {
-    type RoomSize: RoomSize;
+pub trait BurrowState: RoomSize {
+    fn room_size() -> usize;
 
     fn is_goal(&self) -> bool;
 
@@ -132,7 +123,7 @@ pub trait BurrowState {
 
     fn can_enter_room(&self, ap: Amphipod, room: Room) -> bool {
         if room == ap {
-            (0..Self::RoomSize::room_size())
+            (0..<Self as BurrowState>::room_size())
                 .all(|d| match self.get(&Position::Room(room, d as u8)) {
                     Some(a) if a == ap => true,
                     None => true,
@@ -145,13 +136,15 @@ pub trait BurrowState {
 }
 
 impl<B> BurrowState for B
-where B: SliceBackedBurrow + AsRef<[Position]> + Copy
+where B: SliceBackedBurrow + RoomSize + AsRef<[Position]> + Copy
 {
-    type RoomSize = B::RoomSize;
+    fn room_size() -> usize {
+        Self::stride()
+    }
 
     fn get(&self, pos: &Position) -> Option<Amphipod> {
         match self.as_ref().iter().position(|p| *p == *pos) {
-            Some(n) => Some(match n / Self::RoomSize::room_size() {
+            Some(n) => Some(match n / Self::room_size() {
                 0 => Amphipod::Amber,
                 1 => Amphipod::Bronze,
                 2 => Amphipod::Copper,
@@ -227,10 +220,12 @@ impl AsMut<[Position]> for Burrow4 {
 impl<B> SliceBackedBurrow for B
 where B: AsRef<[Position]> + AsMut<[Position]> + RoomSize
 {
-    type RoomSize = B;
+    fn stride() -> usize {
+        B::room_size()
+    }
 
     fn positions_slice(&self, a: Amphipod) -> &[Position] {
-        let stride = Self::RoomSize::room_size();
+        let stride = Self::stride();
         let v = self.as_ref();
         match a {
             Amphipod::Amber => &v[0*stride..1*stride],
@@ -241,7 +236,7 @@ where B: AsRef<[Position]> + AsMut<[Position]> + RoomSize
     }
 
     fn positions_mut(&mut self, a: Amphipod) -> &mut [Position] {
-        let stride = Self::RoomSize::room_size();
+        let stride = Self::stride();
         match a {
             Amphipod::Amber => &mut self.as_mut()[0*stride..1*stride],
             Amphipod::Bronze => &mut self.as_mut()[1*stride..2*stride],
@@ -346,7 +341,7 @@ where B: BurrowState + SliceBackedBurrow + Clone + Copy + Eq + Default + Hash {
                     Position::Room(rm, _) if room_is_clear && *rm == a => (),
                     p if room_is_clear => {
                         // Find deepest room spot and go there
-                        let target = (0..<B as BurrowState>::RoomSize::room_size()).rev()
+                        let target = (0..<B as BurrowState>::room_size()).rev()
                             .find_map(|d| {
                                 let target_pos = Position::Room(a, d as u8);
                                 if state.occupied(&target_pos) {
@@ -465,24 +460,6 @@ impl<B> visit::EdgeRef for StateTransition<B> where B: BurrowState + Copy + Eq +
     fn weight(&self) -> &Self::Weight { panic!() }
     fn id(&self) -> Self::EdgeId {}
 }
-
-const _ALL_POSITIONS: [Position; 15] = [
-    Position::Room(Amphipod::Amber, 2),
-    Position::Room(Amphipod::Bronze, 2),
-    Position::Room(Amphipod::Copper, 2),
-    Position::Room(Amphipod::Desert, 2),
-    Position::Room(Amphipod::Amber, 1),
-    Position::Room(Amphipod::Bronze, 1),
-    Position::Room(Amphipod::Copper, 1),
-    Position::Room(Amphipod::Desert, 1),
-    Position::Hallway(0),
-    Position::Hallway(1),
-    Position::Hallway(3),
-    Position::Hallway(5),
-    Position::Hallway(7),
-    Position::Hallway(9),
-    Position::Hallway(10),
-];
 
 // #############
 // #...........#
