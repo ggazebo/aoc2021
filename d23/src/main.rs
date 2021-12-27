@@ -1,5 +1,5 @@
-use std::cmp;
 use std::cmp::{Ord, Ordering};
+use std::hash::Hash;
 use std::fmt;
 use std::collections::HashSet;
 
@@ -15,19 +15,34 @@ pub enum Amphipod {
     Desert,
 }
 
+const ALL_AMPHIPOD_TYPES: &[Amphipod] = &[Amphipod::Amber, Amphipod::Bronze, Amphipod::Copper, Amphipod::Desert];
+
+pub type Room = Amphipod;
+pub type RoomPos = u8;
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Position {
     Hallway(u8),
-    Room(Amphipod, Room),
+    Room(Room, RoomPos),
 }
 impl Position {
     pub fn hallway_pos(&self) -> u8 {
         match self {
             Position::Hallway(n) => *n,
-            Position::Room(Amphipod::Amber, _) => 2,
-            Position::Room(Amphipod::Bronze, _) => 4,
-            Position::Room(Amphipod::Copper, _) => 6,
-            Position::Room(Amphipod::Desert, _) => 8,
+            Position::Room(Room::Amber, _) => 2,
+            Position::Room(Room::Bronze, _) => 4,
+            Position::Room(Room::Copper, _) => 6,
+            Position::Room(Room::Desert, _) => 8,
+        }
+    }
+
+    pub fn into_hallway(&self) -> Position {
+        match self {
+            Position::Hallway(_) => *self,
+            Position::Room(Room::Amber, _) => Position::Hallway(2),
+            Position::Room(Room::Bronze, _) => Position::Hallway(4),
+            Position::Room(Room::Copper, _) => Position::Hallway(6),
+            Position::Room(Room::Desert, _) => Position::Hallway(8),
         }
     }
 }
@@ -39,7 +54,7 @@ impl Ord for Position {
             match (self, other) {
                 (Position::Room(_,_), Position::Hallway(_)) => Ordering::Less,
                 (Position::Hallway(me), Position::Hallway(other)) => me.cmp(other),
-                (Position::Room(ar, Room::Inner), Position::Room(br, _)) if ar == br => Ordering::Less,
+                (Position::Room(ar, ad), Position::Room(br, bd)) if ar == br => bd.cmp(ad),
                 (Position::Room(ar, _), Position::Room(br, _)) => ar.cmp(br),
                 _ => Ordering::Greater,
             }
@@ -65,171 +80,108 @@ impl fmt::Display for Amphipod {
 impl fmt::Debug for Position {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Position::Room(a, Room::Inner) => write!(f, "{}.", a),
-            Position::Room(a, Room::Outer) => write!(f, "{}|", a),
+            Position::Room(a, d) => write!(f, "{}{}", a, d),
             Position::Hallway(n) => write!(f, "={}=", n),
         }
     }
-}
-impl fmt::Debug for State {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        for n in 0..=10 {
-            match self.occupied(Position::Hallway(n)) {
-                Some(a) => write!(f, "{}", a)?,
-                None => write!(f, ".")?,
-            }
-        }
-        writeln!(f)?;
-        for d in [Room::Outer, Room::Inner] {
-            write!(f, "  ")?;
-            for a in [Amphipod::Amber, Amphipod::Bronze, Amphipod::Copper, Amphipod::Desert] {
-                match self.occupied(Position::Room(a, d)) {
-                    Some(a) => write!(f, "{} ", a)?,
-                    None => write!(f, ". ")?,
-                }
-            }
-            writeln!(f)?
-        }
-        write!(f, "")
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Room {
-    Inner,
-    Outer,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct State([Position; 8]);
 
-impl State {
-    pub fn is_goal(&self) -> bool {
-        *self == GOAL
+pub trait RoomSize {
+    fn room_size() -> usize;
+}
+
+struct Depth2;
+impl RoomSize for Depth2 {
+    fn room_size() -> usize { 2 }
+}
+struct Depth4;
+impl RoomSize for Depth4 {
+    fn room_size() -> usize { 4 }
+}
+
+pub trait SliceBackedBurrow {
+    type RoomSize: RoomSize;
+    fn positions_slice<'a>(&'a self, a: Amphipod) -> &'a [Position];
+    fn positions_mut<'a>(&'a mut self, a: Amphipod) -> &'a mut [Position];
+}
+
+pub trait BurrowState {
+    type RoomSize: RoomSize;
+
+    fn is_goal(&self) -> bool;
+
+    fn get(&self, pos: &Position) -> Option<Amphipod>;
+
+    fn apply_movement<B: BurrowState + Copy>(&mut self, t: &StateTransition<B>);
+
+    fn occupied(&self, pos: &Position) -> bool {
+        self.get(pos).is_some()
     }
 
-    pub fn is_occupied(&self, position: Position) -> bool {
-        self.0.iter().find(|p| **p == position).is_some()
+    fn min_energy(&self) -> Energy;
+
+    fn is_blocked(&self, a: Amphipod, path: &Path) -> bool {
+        match path.end() {
+            Position::Room(rm, _) if !self.can_enter_room(a, rm) => false,
+            _ => path.walk().skip(1).any(|p| self.occupied(&p)),
+        }
     }
 
-    pub fn occupied(&self, position: Position) -> Option<Amphipod> {
-        match self.0.iter().position(|p| *p == position) {
-            Some(idx) => Some(match idx / 2 {
+    fn can_enter_room(&self, ap: Amphipod, room: Room) -> bool {
+        if room == ap {
+            (0..Self::RoomSize::room_size())
+                .all(|d| match self.get(&Position::Room(room, d as u8)) {
+                    Some(a) if a == ap => true,
+                    None => true,
+                    _ => false
+                })
+        } else {
+            false
+        }
+    }
+}
+
+impl<B> BurrowState for B
+where B: SliceBackedBurrow + AsRef<[Position]> + Copy
+{
+    type RoomSize = B::RoomSize;
+
+    fn get(&self, pos: &Position) -> Option<Amphipod> {
+        match self.as_ref().iter().position(|p| *p == *pos) {
+            Some(n) => Some(match n / Self::RoomSize::room_size() {
                 0 => Amphipod::Amber,
                 1 => Amphipod::Bronze,
                 2 => Amphipod::Copper,
                 3 => Amphipod::Desert,
-                _ => panic!(),
+                _ => panic!("Out of bound when searching through positions"),
             }),
             None => None,
         }
     }
 
-    pub fn is_blocked(&self, a: Amphipod, path: &Path) -> bool {
-        if self.is_occupied(path.end()) {
-            return true
-        }
-
-        // Check if room can be entered
-        match path.as_ref() {
-            // Don't try to move within the same room
-            [Position::Room(from, _), Position::Room(to, _)] if from == to => return true,
-            // Can't move out of Inner if Outer is occupied
-            [Position::Room(a, Room::Inner), _] if self.is_occupied(Position::Room(*a, Room::Outer)) => return true,
-            // Can't move into Inner if Outer is occupied
-            [_, Position::Room(r_type, Room::Inner)] => {
-                if self.is_occupied(Position::Room(*r_type, Room::Outer)) {
-                    return true
-                }
-            },
-            [_, Position::Room(r_type, _)] => {
-                if *r_type != a {
-                    return true
-                }
-                match self.occupied(Position::Room(*r_type, Room::Inner)) {
-                    Some(occupier) if occupier != *r_type => return true, // Wrong amphipod in this room
-                    None => return true, // Don't move to Outer if Inner is free
-                    _ => (),
-                }
-            },
-            // Don't move between hallway positions
-            [Position::Hallway(_), Position::Hallway(_)] => return true,
-            _ => (),
-        };
-
-        // Check that hallway is clear
-        let hallway_range = match [path.start(), path.end()] {
-            [Position::Room(a, _), Position::Hallway(h)] => {
-                let ah = path.start().hallway_pos();
-                if ah < h { ah..=h } else { h..=ah }
-            },
-            [Position::Hallway(h), Position::Room(a, _)] => {
-                let ah = path.end().hallway_pos();
-                if ah < h { ah..=h-1 } else { h+1..=ah }
-            }
-            [p1, p2] => {
-                let a = p1.hallway_pos();
-                let b = p2.hallway_pos();
-                if a < b { a..=b } else { b..=a }
-            }
-            _ => panic!(),
-        };
-
-        for n in hallway_range {
-            if self.is_occupied(Position::Hallway(n)) {
-                return true
-            }
-        }
-
-        false
+    fn is_goal(&self) -> bool {
+        ALL_AMPHIPOD_TYPES
+            .iter()
+            .all(|&a| self.positions_slice(a)
+                .iter()
+                .all(|p| match p { Position::Room(rm, _) => *rm == a, _ => false}))
     }
 
-    pub fn positions(&self, a: Amphipod) -> &[Position] {
-        &self.0[match a {
-            Amphipod::Amber => 0..2,
-            Amphipod::Bronze => 2..4,
-            Amphipod::Copper => 4..6,
-            Amphipod::Desert => 6..8,
-        }]
+    fn min_energy(&self) -> Energy {
+        ALL_AMPHIPOD_TYPES.iter()
+            .flat_map(move |ap| self.positions_slice(*ap)
+                .into_iter()
+                .map(move |p| match (*ap, p) {
+                    (_, Position::Room(rm, _)) if ap == rm => 0,
+                    (_, p) => Path::from([*p, Position::Room(*ap, 0)]).cost(*ap),
+                }))
+            .sum()
     }
 
-    pub fn positions_mut(&mut self, a: Amphipod) -> &mut [Position] {
-        &mut self.0[match a {
-            Amphipod::Amber => 0..2,
-            Amphipod::Bronze => 2..4,
-            Amphipod::Copper => 4..6,
-            Amphipod::Desert => 6..8,
-        }]
-    }
-
-    pub fn normalize(&mut self) {
-        self.positions_mut(Amphipod::Amber).sort();
-        self.positions_mut(Amphipod::Bronze).sort();
-        self.positions_mut(Amphipod::Copper).sort();
-        self.positions_mut(Amphipod::Desert).sort();
-    }
-
-    pub fn min_energy(&self) -> Energy {
-        if *self == GOAL {
-            return 0;
-        }
-
-        let mut sum = 0;
-        for a in [Amphipod::Amber, Amphipod::Bronze, Amphipod::Copper, Amphipod::Desert] {
-            let p = self.positions(a);
-            let inner = Position::Room(a, Room::Inner);
-            let outer = Position::Room(a, Room::Outer);
-
-            sum += cmp::min(
-                Path::from([p[0], inner]).cost(a) + Path::from([p[1], outer]).cost(a),
-                Path::from([p[1], inner]).cost(a) + Path::from([p[0], outer]).cost(a)
-            );
-        }
-        //println!("min energy: {}", sum);
-        sum
-    }
-
-    pub fn apply_movement(&mut self, t: StateTransition) {
+    fn apply_movement<S>(&mut self, t: &StateTransition<S>) where S: BurrowState + Copy {
         let path = t.path;
         let pos = self.positions_mut(t.a);
         match pos.iter_mut().find(|p| **p == path.start()) {
@@ -237,7 +189,65 @@ impl State {
             None => panic!("Not a valid movement"),
         };
         pos.sort();
-        //println!("-> {:?}", self.0);
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct Burrow2([Position; 8]);
+impl Default for Burrow2 {
+    fn default() -> Self { Burrow2([Position::Hallway(0); 8]) }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct Burrow4([Position; 16]);
+impl Default for Burrow4 {
+    fn default() -> Self { Burrow4([Position::Hallway(0); 16]) }
+}
+
+impl RoomSize for Burrow2 {
+    fn room_size() -> usize { 2 }
+}
+impl AsRef<[Position]> for Burrow2 {
+    fn as_ref(&self) -> &[Position] { &self.0 }
+}
+impl AsMut<[Position]> for Burrow2 {
+    fn as_mut(&mut self) -> &mut [Position] { &mut self.0 }
+}
+
+impl RoomSize for Burrow4 {
+    fn room_size() -> usize { 4 }
+}
+impl AsRef<[Position]> for Burrow4 {
+    fn as_ref(&self) -> &[Position] { &self.0 }
+}
+impl AsMut<[Position]> for Burrow4 {
+    fn as_mut(&mut self) -> &mut [Position] { &mut self.0 }
+}
+
+impl<B> SliceBackedBurrow for B
+where B: AsRef<[Position]> + AsMut<[Position]> + RoomSize
+{
+    type RoomSize = B;
+
+    fn positions_slice(&self, a: Amphipod) -> &[Position] {
+        let stride = Self::RoomSize::room_size();
+        let v = self.as_ref();
+        match a {
+            Amphipod::Amber => &v[0*stride..1*stride],
+            Amphipod::Bronze => &v[1*stride..2*stride],
+            Amphipod::Copper => &v[2*stride..3*stride],
+            Amphipod::Desert => &v[3*stride..4*stride],
+        }
+    }
+
+    fn positions_mut(&mut self, a: Amphipod) -> &mut [Position] {
+        let stride = Self::RoomSize::room_size();
+        match a {
+            Amphipod::Amber => &mut self.as_mut()[0*stride..1*stride],
+            Amphipod::Bronze => &mut self.as_mut()[1*stride..2*stride],
+            Amphipod::Copper => &mut self.as_mut()[2*stride..3*stride],
+            Amphipod::Desert => &mut self.as_mut()[3*stride..4*stride],
+        }
     }
 }
 
@@ -248,37 +258,12 @@ impl Path {
     pub fn start(&self) -> Position { self.0[0] }
     pub fn end(&self) -> Position { self.0[1] }
 
+    pub fn walk(&self) -> PathWalk {
+        PathWalk { here: Some(self.start()), end: self.end() }
+    }
 
     pub fn steps(&self) -> usize {
-        if self.0[0] == self.0[1] {
-            return 0
-        }
-        let mut p = self.0.clone();
-        p.sort();
-        match p {
-            [Position::Hallway(s), Position::Hallway(e)] => (e - s) as usize,
-            [Position::Room(s, Room::Inner), Position::Room(e, Room::Inner)] => Self::horiz_steps(s, e) + 4,
-            [Position::Room(s, Room::Outer), Position::Room(e, Room::Outer)] => Self::horiz_steps(s, e) + 2,
-            [Position::Room(s, _), Position::Room(e, _)] => Self::horiz_steps(s, e) + 3,
-            [Position::Room(s, rm), Position::Hallway(n)] => {
-                let rm_pos = match s {
-                    Amphipod::Amber => 2,
-                    Amphipod::Bronze => 4,
-                    Amphipod::Copper => 6,
-                    Amphipod::Desert => 8,
-                };
-                let into_room = match rm {
-                    Room::Inner => 2,
-                    Room::Outer => 1,
-                };
-
-                into_room + (if rm_pos > n { rm_pos - n } else { n - rm_pos }) as usize
-            },
-            [p1, p2] => {
-                //println!("?? {:?}->{:?}", p1, p2);
-                100
-            },
-        }
+        self.walk().count() - 1
     }
 
     pub fn cost(&self, a: Amphipod) -> Energy {
@@ -289,17 +274,8 @@ impl Path {
             Amphipod::Desert => 1000,
         }
     }
-
-    fn horiz_steps(start: Amphipod, end: Amphipod) -> usize {
-        match (start, end) {
-            (Amphipod::Amber, Amphipod::Copper) => 4,
-            (Amphipod::Amber, Amphipod::Desert) => 6,
-            (Amphipod::Bronze, Amphipod::Desert) => 4,
-            (s, e) if s == e => 0,
-            _ => 2
-        }
-    }
 }
+
 impl From<[Position; 2]> for Path {
     fn from(a: [Position; 2]) -> Path { Path(a) }
 }
@@ -307,69 +283,118 @@ impl AsRef<[Position; 2]> for Path {
     fn as_ref(&self) -> &[Position; 2] { &self.0 }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-struct StateGraph;
+pub struct PathWalk {
+    here: Option<Position>,
+    end: Position,
+}
+impl Iterator for PathWalk {
+    type Item = Position;
 
-impl visit::IntoEdges for StateGraph {
-    type Edges = StateTransitions;
-    fn edges(self, state: State) -> Self::Edges {
-        //println!(": {:?}", &state.0);
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.here {
+            Some(p) if p == self.end => {
+                self.here = None;
+                Some(p)
+            },
+            Some(p) => {
+                self.here = match (p, self.end) {
+                    (Position::Hallway(n), Position::Room(a, _)) => {
+                        let rm = Position::Room(a, 0);
+                        if let Position::Hallway(t) = rm.into_hallway() {
+                            if n == t {
+                                Some(rm)
+                            } else {
+                                Some(Position::Hallway(if n < t { n + 1 } else { n - 1 }))
+                            }
+                        } else {
+                            panic!();
+                        }
+                    },
+                    (Position::Hallway(a), Position::Hallway(b))
+                        => Some(Position::Hallway(if a < b { a + 1 } else { a - 1 })),
+                    (Position::Room(aa, ad), Position::Room(ba, bd)) if aa == ba
+                        => Some(Position::Room(aa, if ad > bd { ad - 1 } else { ad + 1 })),
+                    (Position::Room(a, d), _) if d == 0 => Some(Position::Room(a, d).into_hallway()),
+                    (Position::Room(a, d), _) => Some(Position::Room(a, d - 1)),
+                };
+                Some(p)
+            }
+            None => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+struct StateGraph<B>(std::marker::PhantomData<B>)
+where B: BurrowState + Copy + Eq + Default;
+
+impl<B> visit::IntoEdges for StateGraph<B>
+where B: BurrowState + SliceBackedBurrow + Clone + Copy + Eq + Default + Hash {
+    type Edges = StateTransitions<B>;
+    fn edges(self, state: B) -> Self::Edges {
         // Generate all possible state transitions
         let mut transitions = Vec::with_capacity(8);
-        for (idx, &start) in state.0.iter().enumerate() {
-            let a = match idx / 2 {
-                0 => Amphipod::Amber,
-                1 => Amphipod::Bronze,
-                2 => Amphipod::Copper,
-                3 => Amphipod::Desert,
-                _ => panic!(),
-            };
 
-            match start {
-                // Don't move if already in room inner
-                Position::Room(rm, Room::Inner) if a == rm => { continue; },
-                // Don't move if already in full room
-                Position::Room(rm, d) if a == rm => {
-                    let other = match d {
-                        Room::Inner => Room::Outer,
-                        Room::Outer => Room::Inner
-                    };
-                    match state.occupied(Position::Room(rm, other)) {
-                        Some(partner) if partner == a => { continue; },
-                        _ => (),
-                    }
-                },
-                _ => (),
-            };
+        for &a in ALL_AMPHIPOD_TYPES {
+            // Can amphipods go home?
+            let room_is_clear = state.can_enter_room(a, a);
 
-            for &end in &_ALL_POSITIONS {
-                let path = Path::from([start, end]);
-                if !state.is_blocked(a, &path) {
-                    transitions.push(StateTransition { start: state, a, path })
+            // TODO: This requires SliceBackedBurrow
+            for p in state.positions_slice(a) {
+                match p {
+                    // Already home
+                    Position::Room(rm, _) if room_is_clear && *rm == a => (),
+                    p if room_is_clear => {
+                        // Find deepest room spot and go there
+                        let target = (0..<B as BurrowState>::RoomSize::room_size()).rev()
+                            .find_map(|d| {
+                                let target_pos = Position::Room(a, d as u8);
+                                if state.occupied(&target_pos) {
+                                    None
+                                } else {
+                                    Some(target_pos)
+                                }
+                            }).unwrap();
+                        
+                        let path = [*p, target].into();
+                        if !state.is_blocked(a, &path) {
+                            transitions.push(StateTransition { start: state, a, path });
+                        }
+                    },
+                    Position::Room(..) => {
+                        // Go to all the hallway spots
+                        for h in [0, 1, 3, 5, 7, 9, 10] {
+                            let path = [*p, Position::Hallway(h)].into();
+                            if !state.is_blocked(a, &path) {
+                                transitions.push(StateTransition { start: state, a, path });
+                            }
+                        }
+                    },
+                    _ => (),
                 }
             }
         }
         transitions.into()
     }
 }
-impl visit::IntoEdgeReferences for StateGraph {
-    type EdgeRef = StateTransition;
+impl<B> visit::IntoEdgeReferences for StateGraph<B> where B: BurrowState + Copy + Eq + Default + Hash {
+    type EdgeRef = StateTransition<B>;
     type EdgeReferences = std::iter::Empty<Self::EdgeRef>;
 
     fn edge_references(self) -> Self::EdgeReferences {
-        std::iter::empty()
+        panic!("Not expecting to have all edges enumerated");
     }
 }
-impl visit::IntoNeighbors for StateGraph {
-    type Neighbors = PossibleNextStates;
+impl<B> visit::IntoNeighbors for StateGraph<B> where B: BurrowState + Copy + Eq + Default {
+    type Neighbors = std::iter::Empty<Self::NodeId>;
 
-    fn neighbors(self, start: Self::NodeId) -> Self::Neighbors {
-        vec!().into()
+    fn neighbors(self, _start: Self::NodeId) -> Self::Neighbors {
+        panic!("Unspected iteration of node neighbours");
     }
 }
 
-impl visit::Visitable for StateGraph {
-    type Map = HashSet<State>;
+impl<B> visit::Visitable for StateGraph<B> where B: BurrowState + Copy + Eq + Default + Hash {
+    type Map = HashSet<B>;
 
     fn visit_map(&self) -> Self::Map {
         HashSet::new()
@@ -380,40 +405,27 @@ impl visit::Visitable for StateGraph {
     }
 }
 
-impl visit::Data for StateGraph {
+impl<B> visit::Data for StateGraph<B> where B: BurrowState + Copy + Eq + Default {
     type NodeWeight = ();
     type EdgeWeight = Energy;
 }
-impl visit::GraphBase for StateGraph {
+impl<B> visit::GraphBase for StateGraph<B> where B: BurrowState + Copy + Eq + Default {
     type EdgeId = ();
-    type NodeId = State;
+    type NodeId = B;
 }
-impl visit::GraphRef for StateGraph {
-}
+impl<B> visit::GraphRef for StateGraph<B> where B: BurrowState + Copy + Eq + Default {}
 
-pub struct StateTransitions {
-    transitions: Vec<StateTransition>,
+pub struct StateTransitions<B> where B: BurrowState + Copy{
+    transitions: Vec<StateTransition<B>>,
     n: usize,
 }
-impl From<Vec<StateTransition>> for StateTransitions {
-    fn from(transitions: Vec<StateTransition>) -> Self {
+impl<B> From<Vec<StateTransition<B>>> for StateTransitions<B> where B: BurrowState + Copy {
+    fn from(transitions: Vec<StateTransition<B>>) -> Self {
         StateTransitions { transitions, n: 0 }
     }
 }
-/*
-impl From<PossibleNextStates> for StateTransitions {
-    fn from(states: PossibleNextStates) -> Self {
-        StateTransitions { states }
-    }
-}
-impl From<Vec<State>> for StateTransitions {
-    fn from(states:  Vec<State>) -> Self {
-        StateTransitions { states: states.into() }
-    }
-}
-*/
-impl Iterator for StateTransitions {
-    type Item = StateTransition;
+impl<B> Iterator for StateTransitions<B> where B: BurrowState + Copy {
+    type Item = StateTransition<B>;
     fn next(&mut self) -> Option<Self::Item> {
         match self.transitions.get(self.n) {
             Some(&p) => { self.n += 1; Some(p) },
@@ -422,46 +434,31 @@ impl Iterator for StateTransitions {
     }
 }
 
-pub struct PossibleNextStates {
-    states: Vec<State>,
-}
-impl From<Vec<State>> for PossibleNextStates {
-    fn from(states:  Vec<State>) -> Self {
-        Self { states }
-    }
-}
-impl Iterator for PossibleNextStates {
-    type Item = State;
-    fn next(&mut self) -> Option<Self::Item> {
-        None
-    }
-}
-
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct StateTransition {
-    start: State,
+pub struct StateTransition<B> where B: BurrowState + Copy {
+    start: B,
     a: Amphipod,
     path: Path,
 }
 
 pub type Energy = u32;
 
-impl StateTransition {
+impl<B> StateTransition<B> where B: BurrowState + Copy {
     pub fn cost(&self) -> Energy {
         self.path.cost(self.a)
     }
 }
 
-impl visit::EdgeRef for StateTransition {
-    type NodeId = State;
+impl<B> visit::EdgeRef for StateTransition<B> where B: BurrowState + Copy + Eq + Hash {
+    type NodeId = B;
     type EdgeId = ();
     type Weight = Energy;
 
     fn source(&self) -> Self::NodeId { self.start }
     fn target(&self) -> Self::NodeId {
         let mut target = self.start.clone();
-        target.apply_movement(*self);
+        target.apply_movement(self);
         target
     }
 
@@ -470,14 +467,14 @@ impl visit::EdgeRef for StateTransition {
 }
 
 const _ALL_POSITIONS: [Position; 15] = [
-    Position::Room(Amphipod::Amber, Room::Inner),
-    Position::Room(Amphipod::Bronze, Room::Inner),
-    Position::Room(Amphipod::Copper, Room::Inner),
-    Position::Room(Amphipod::Desert, Room::Inner),
-    Position::Room(Amphipod::Amber, Room::Outer),
-    Position::Room(Amphipod::Bronze, Room::Outer),
-    Position::Room(Amphipod::Copper, Room::Outer),
-    Position::Room(Amphipod::Desert, Room::Outer),
+    Position::Room(Amphipod::Amber, 2),
+    Position::Room(Amphipod::Bronze, 2),
+    Position::Room(Amphipod::Copper, 2),
+    Position::Room(Amphipod::Desert, 2),
+    Position::Room(Amphipod::Amber, 1),
+    Position::Room(Amphipod::Bronze, 1),
+    Position::Room(Amphipod::Copper, 1),
+    Position::Room(Amphipod::Desert, 1),
     Position::Hallway(0),
     Position::Hallway(1),
     Position::Hallway(3),
@@ -492,54 +489,129 @@ const _ALL_POSITIONS: [Position; 15] = [
 // ###B#C#B#D###
 //   #A#D#C#A#
 //   #########
-const _SAMPLE_INPUT: State = State([
-    Position::Room(Amphipod::Amber, Room::Inner),
-    Position::Room(Amphipod::Desert, Room::Inner),
-    Position::Room(Amphipod::Amber, Room::Outer),
-    Position::Room(Amphipod::Copper, Room::Outer),
-    Position::Room(Amphipod::Bronze, Room::Outer),
-    Position::Room(Amphipod::Copper, Room::Inner),
-    Position::Room(Amphipod::Bronze, Room::Inner),
-    Position::Room(Amphipod::Desert, Room::Outer),
-]);
+const _SAMPLE_INPUT: [Position; 8] = [
+    Position::Room(Room::Amber, 1),
+    Position::Room(Room::Desert, 1),
+    Position::Room(Room::Amber, 0),
+    Position::Room(Room::Copper, 0),
+    Position::Room(Room::Bronze, 0),
+    Position::Room(Room::Copper, 1),
+    Position::Room(Room::Bronze, 1),
+    Position::Room(Room::Desert, 0),
+];
 
 // #############
 // #...........#
 // ###B#B#C#D###
 //   #D#C#A#A#
 //   #########
-const _PROBLEM_INPUT: State = State([
-    Position::Room(Amphipod::Copper, Room::Inner),
-    Position::Room(Amphipod::Desert, Room::Inner),
-    Position::Room(Amphipod::Amber, Room::Outer),
-    Position::Room(Amphipod::Bronze, Room::Outer),
-    Position::Room(Amphipod::Bronze, Room::Inner),
-    Position::Room(Amphipod::Copper, Room::Outer),
-    Position::Room(Amphipod::Amber, Room::Inner),
-    Position::Room(Amphipod::Desert, Room::Outer),
-]);
-    
-const GOAL: State = State([
-    Position::Room(Amphipod::Amber, Room::Inner),
-    Position::Room(Amphipod::Amber, Room::Outer),
-    Position::Room(Amphipod::Bronze, Room::Inner),
-    Position::Room(Amphipod::Bronze, Room::Outer),
-    Position::Room(Amphipod::Copper, Room::Inner),
-    Position::Room(Amphipod::Copper, Room::Outer),
-    Position::Room(Amphipod::Desert, Room::Inner),
-    Position::Room(Amphipod::Desert, Room::Outer),
-]);
+const _PROBLEM_INPUT: [Position; 8] = [
+    Position::Room(Room::Copper, 1),
+    Position::Room(Room::Desert, 1),
+    Position::Room(Room::Amber, 0),
+    Position::Room(Room::Bronze, 0),
+    Position::Room(Room::Bronze, 1),
+    Position::Room(Room::Copper, 0),
+    Position::Room(Room::Amber, 1),
+    Position::Room(Room::Desert, 0),
+];
+
+impl From<&[Position]> for Burrow2 {
+    fn from(p: &[Position]) -> Burrow2 {
+        let mut d = [Position::Hallway(0); 8];
+        d.clone_from_slice(p);
+        Burrow2(d)
+    }
+}
+impl fmt::Debug for Burrow2 {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        for n in 0..=10 {
+            match self.get(&Position::Hallway(n)) {
+                Some(a) => write!(f, "{}", a)?,
+                None => write!(f, ".")?,
+            }
+        }
+        writeln!(f)?;
+        for d in 0..2 {
+            write!(f, "  ")?;
+            for a in [Amphipod::Amber, Amphipod::Bronze, Amphipod::Copper, Amphipod::Desert] {
+                match self.get(&Position::Room(a, d)) {
+                    Some(a) => write!(f, "{} ", a)?,
+                    None => write!(f, ". ")?,
+                }
+            }
+            writeln!(f)?
+        }
+        write!(f, "")
+    }
+}
+
+impl From<&[Position]> for Burrow4 {
+    fn from(p: &[Position]) -> Burrow4 {
+        let mut d = [Position::Hallway(0); 16];
+        for i in 0..4 {
+            d[i*4..i*4+2].clone_from_slice(&p[i*2..i*2+2]);
+            for n in 0..2 {
+                let idx = i*4+n;
+                if let Position::Room(rm, r) = d[idx] {
+                    if r == 1 {
+                        d[idx] = Position::Room(rm, 3);
+                    }
+                }
+            }
+        }
+
+        // INSERT:
+        //   #D#C#B#A#
+        //   #D#B#A#C#
+        d[2] = Position::Room(Room::Copper, 2);
+        d[3] = Position::Room(Room::Desert, 1);
+        d[6] = Position::Room(Room::Bronze, 2);
+        d[7] = Position::Room(Room::Copper, 1);
+        d[10] = Position::Room(Room::Bronze, 1);
+        d[11] = Position::Room(Room::Desert, 2);
+        d[14] = Position::Room(Room::Amber, 1);
+        d[15] = Position::Room(Room::Amber, 2);
+        Burrow4(d)
+    }
+}
+impl fmt::Debug for Burrow4 {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        for n in 0..=10 {
+            match self.get(&Position::Hallway(n)) {
+                Some(a) => write!(f, "{}", a)?,
+                None => write!(f, ".")?,
+            }
+        }
+        writeln!(f)?;
+        for d in 0..4 {
+            write!(f, "  ")?;
+            for a in [Amphipod::Amber, Amphipod::Bronze, Amphipod::Copper, Amphipod::Desert] {
+                match self.get(&Position::Room(a, d)) {
+                    Some(a) => write!(f, "{} ", a)?,
+                    None => write!(f, ". ")?,
+                }
+            }
+            writeln!(f)?
+        }
+        write!(f, "")
+    }
+}
 
 
-fn find_shortest(start: &State) -> Option<(Energy, Vec<State>)> {
-    astar(StateGraph::default(), *start, |s| s == GOAL,
+fn find_shortest<B>(start: &B) -> Option<(Energy, Vec<B>)>
+where B: BurrowState + SliceBackedBurrow + Copy + Eq + Default + std::hash::Hash {
+    astar(StateGraph::<B>::default(), *start,
+        |s| s.is_goal(),
         |m| m.cost(),
         |s| s.min_energy())
 }
 
 fn main() {
     println!("for SAMPLE");
-    match find_shortest(&_SAMPLE_INPUT) {
+    let burrow = Burrow2::from(_SAMPLE_INPUT.as_ref());
+    println!("{:?}", &burrow);
+    match find_shortest(&burrow) {
         Some((cost, states)) => {
             for s in states {
                 println!(": {:?}", s.0);
@@ -550,22 +622,50 @@ fn main() {
     };
 
     println!("for PROBLEM");
-    match find_shortest(&_PROBLEM_INPUT) {
+    let burrow = Burrow2::from(_PROBLEM_INPUT.as_ref());
+    match find_shortest(&burrow) {
         Some((cost, states)) => {
             for s in states {
-                println!("{:?}", s);
+                //println!("{:?}", s);
+                println!(": {:?}", s.0);
             }
             println!("{} energy", cost);
         },
         None => println!("NO SOLUTION"),
     };
 
+    println!("for SAMPLE (p2)");
+    let burrow = Burrow4::from(_SAMPLE_INPUT.as_ref());
+    println!("{:?}", &burrow);
+    match find_shortest(&burrow) {
+        Some((cost, states)) => {
+            for s in states {
+                println!(": {:?}", s.0);
+            }
+            println!("{} energy", cost);
+        },
+        None => println!("NO SOLUTION"),
+    };
+
+    println!("for PROBLEM (p2)");
+    let burrow = Burrow4::from(_PROBLEM_INPUT.as_ref());
+    println!("{:?}", &burrow);
+    match find_shortest(&burrow) {
+        Some((cost, states)) => {
+            for s in states {
+                println!(": {:?}", s.0);
+            }
+            println!("{} energy", cost);
+        },
+        None => println!("NO SOLUTION"),
+    };
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /*
     #[test]
     fn wins() {
         // #############
@@ -597,5 +697,12 @@ mod tests {
             Ordering::Equal => "=",
         });
         assert!(r < h);
+    }
+    */
+
+    #[test]
+    fn room_to_room_has_correct_steps() {
+        let p = Path::from([Position::Room(Room::Amber, 1), Position::Room(Room::Bronze, 0)]);
+        assert_eq!(p.walk().take(20).count(), 6);
     }
 }
