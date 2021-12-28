@@ -13,7 +13,6 @@ name = "d15"
 version = "0.1.0"
 dependencies = [
  "pathfinding",
- "petgraph",
 ]
 
 [[package]]
@@ -83,16 +82,6 @@ dependencies = [
  "itertools",
  "num-traits",
  "rustc-hash",
-]
-
-[[package]]
-name = "petgraph"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a13a2fa9d0b63e5f22328828741e523766fff0ee9e779316902290dff3f824f"
-dependencies = [
- "fixedbitset",
- "indexmap",
 ]
 
 [[package]]
